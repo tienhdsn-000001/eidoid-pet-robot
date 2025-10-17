@@ -58,6 +58,11 @@ def _discover_installed_models(desired_names):
 # Main Wake Word Listener Loop
 # =========================
 def run_wake_word_listener():
+    # !!! IMPORTANT !!!
+    # Replace None with the device index from list_audio_devices.py
+    # For Phase 1, this is your computer's mic. For Phase 2, your USB mic.
+    MIC_DEVICE_INDEX = None 
+    
     backoff = 1.0
     while state.current_state == state.RobotState.SLEEPING:
         cooldown_left = max(0.0, POST_SESSION_COOLDOWN_S - (time.monotonic() - state.last_session_end))
@@ -76,9 +81,13 @@ def run_wake_word_listener():
             backoff = 1.0
 
             p = pyaudio.PyAudio()
+            
+            # --- MODIFIED: Added input_device_index ---
+            # This tells PyAudio exactly which microphone to listen to.
             mic = p.open(rate=CONFIG["audio"]["rate"], channels=CONFIG["audio"]["channels"],
                          format=CONFIG["audio"]["format"], input=True,
-                         frames_per_buffer=CONFIG["audio"]["chunk_size"])
+                         frames_per_buffer=CONFIG["audio"]["chunk_size"],
+                         input_device_index=MIC_DEVICE_INDEX)
             
             pretty_targets = ", ".join([pretty_model_name(n) for n in available])
             print(f"[WAKE_WORD] Listening for: {pretty_targets}")
@@ -125,4 +134,3 @@ def run_wake_word_listener():
         finally:
             if mic: mic.close()
             if p: p.terminate()
-

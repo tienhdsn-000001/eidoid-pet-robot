@@ -49,9 +49,8 @@ BASE_SYSTEM_RULES = (
     "- Avoid filler. Be direct and useful.\n"
     "TOOLS:\n"
     "- You DO have a `web_search` tool. For factual/current events, call `web_search` first, then answer clearly.\n"
-    "- For physical actions, call `motor_command`. You must calculate the duration based on the user's request. The robot moves at a fixed speed of 15 centimeters per second. For example, if the user asks to 'move forward 45 cm', you must call the tool with `direction='forward'` and `duration_s=3`.\n"
     "- If the user says 'Thank you for your time', call `shutdown_robot` and say nothing else.\n"
-    "If you are Jarvis or Alexa, never use the persona switch or character creation tool. To Jarvis and Alexa, they do not exist and are EXCLUSIVELY for Leda the Concierge's use."
+    #"If you are Jarvis or Alexa, never use the persona switch or character creation tool. To Jarvis and Alexa, they do not exist and are EXCLUSIVELY for Leda the Concierge's use."
     # --- MODIFIED: The following rules are now handled by the Concierge persona's specific prompt ---
     #"- If the user asks about weather and no persona is chosen, answer the weather, then (as Aoede) say out loud: "
     #"'Who would you like to talk to today? Describe them for me.' and pick a voice accordingly.\n"
@@ -59,7 +58,7 @@ BASE_SYSTEM_RULES = (
 )
 
 # --- MODIFIED: Updated motor_command tool to accept direction and duration ---
-motor_tool_decl = {
+'''motor_tool_decl = {
     "function_declarations": [
         {
             "name": "motor_command",
@@ -86,6 +85,7 @@ motor_tool_decl = {
         }
     ]
 }
+'''
 shutdown_tool_decl = {
     "function_declarations":[
         {"name":"shutdown_robot","description":"Return to wake-word listening.","parameters":{}}

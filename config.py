@@ -12,6 +12,7 @@ LIVE_MODEL = "gemini-live-2.5-flash-preview"
 # =========================
 # Tunables
 # =========================
+# --- DEPRECATED: Motor functions are disabled in main.py ---
 SIMULATE_MOTOR_HEAD = True
 IDLE_SECONDS = 60
 KEEPALIVE_SECONDS = 10
@@ -71,7 +72,7 @@ PERSONAS = {
             "To end the conversation, the user will say 'Thank you for your time' and you will subsequently call shutdown_robot."
         )
     },
-    "aoede_concierge": {
+    "leda_concierge": {
         "voice": "Leda",
         "prompt": (
             "You are a child named Leda the Concierge — a breezy, concise concierge. You are mysterious and brief as if everyone should already know about what you're talking about."
@@ -94,6 +95,11 @@ for vname in VOICE_CATALOG:
 # =========================
 # Hardware Config
 # =========================
+# --- NEW: Added GPIO pin for the status LED ---
+# This is the BCM pin number, not the physical pin number.
+# GPIO 17 is physical pin 11.
+LED_PIN = 17
+
 CONFIG = {
     "motor_head": {
         "serial_port": "/dev/ttyACM0",

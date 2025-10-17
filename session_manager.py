@@ -34,13 +34,26 @@ async def gemini_live_session():
     """
     state.set_state(state.RobotState.LISTENING)
 
+    # !!! IMPORTANT !!!
+    # Replace None with the device indices from list_audio_devices.py
+    # For Phase 1, Mic is your computer's mic. For Phase 2, it's your USB mic.
+    # The speaker should be your USB speaker for both phases.
+    MIC_DEVICE_INDEX = None 
+    SPEAKER_DEVICE_INDEX = None
+
     p = pyaudio.PyAudio()
+
+    # --- MODIFIED: Added input_device_index ---
     mic_stream = p.open(format=CONFIG["audio"]["format"], channels=CONFIG["audio"]["channels"],
                         rate=CONFIG["audio"]["rate"], input=True,
-                        frames_per_buffer=CONFIG["audio"]["chunk_size"])
+                        frames_per_buffer=CONFIG["audio"]["chunk_size"],
+                        input_device_index=MIC_DEVICE_INDEX)
+                        
+    # --- MODIFIED: Added output_device_index ---
     spk_stream = p.open(format=pyaudio.paInt16, channels=CONFIG["audio"]["channels"],
                         rate=CONFIG["audio"]["speaker_rate"], output=True,
-                        frames_per_buffer=CONFIG["audio"]["chunk_size"])
+                        frames_per_buffer=CONFIG["audio"]["chunk_size"],
+                        output_device_index=SPEAKER_DEVICE_INDEX)
 
     reconnect_attempt = 0
     backoff = RECONNECT_BACKOFF_SECONDS
