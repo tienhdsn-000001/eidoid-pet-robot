@@ -55,6 +55,8 @@ def main():
         # serial_mgr.close()
         # --- NEW: Ensure LEDs are off on exit ---
         led_controller.turn_off()
+        # Save all memories before exit
+        state.cleanup_memories()
         print("[MAIN] Cleanup complete. Exiting.")
 
 if __name__ == "__main__":

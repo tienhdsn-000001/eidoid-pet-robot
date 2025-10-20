@@ -20,7 +20,9 @@ from services import (searcher, send_command_to_mcu,
                       build_character_persona_instructions, blank_key_for_voice,
                       client, motor_tool_decl, shutdown_tool_decl, web_search_tool_decl,
                       persona_switch_tool_decl, character_creation_tool_decl,
-                      BASE_SYSTEM_RULES)
+                      BASE_SYSTEM_RULES, query_persona_memories, store_persona_memory,
+                      analyze_persona_personality, memory_query_tool_decl,
+                      memory_store_tool_decl, personality_analysis_tool_decl)
 from utils import says_shutdown
 
 # =========================
@@ -93,6 +95,10 @@ async def gemini_live_session():
             all_tools = [motor_tool_decl, shutdown_tool_decl, web_search_tool_decl, persona_switch_tool_decl]
             if state.concierge_waiting_for_description:
                  all_tools.append(character_creation_tool_decl)
+            
+            # Add memory tools for Jarvis and Alexa personas
+            if state.active_persona_key in ["jarvis", "alexa"]:
+                all_tools.extend([memory_query_tool_decl, memory_store_tool_decl, personality_analysis_tool_decl])
 
             return {
                 "system_instruction": compose_system_instruction(),
@@ -228,6 +234,26 @@ async def gemini_live_session():
                                     responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK"}))
                                 else:
                                     responses.append(types.FunctionResponse(id=fid,name=name,response={"status":"ERROR"}))
+                            elif name == "query_memories":
+                                query = args.get("query", "")
+                                memory_type = args.get("memory_type", "all")
+                                max_results = args.get("max_results", 5)
+                                result = query_persona_memories(state.active_persona_key, query, memory_type, max_results)
+                                responses.append(types.FunctionResponse(id=fid, name=name, response=result))
+                            elif name == "store_important_memory":
+                                content = args.get("content")
+                                memory_type = args.get("memory_type")
+                                importance = args.get("importance")
+                                tags = args.get("tags", [])
+                                if content and memory_type and importance:
+                                    result = store_persona_memory(state.active_persona_key, content, memory_type, importance, tags)
+                                    responses.append(types.FunctionResponse(id=fid, name=name, response=result))
+                                else:
+                                    responses.append(types.FunctionResponse(id=fid, name=name, response={"status": "ERROR", "message": "Missing required parameters"}))
+                            elif name == "analyze_personality_development":
+                                include_history = args.get("include_history", False)
+                                result = analyze_persona_personality(state.active_persona_key, include_history)
+                                responses.append(types.FunctionResponse(id=fid, name=name, response=result))
                         if responses: await session.send_tool_response(function_responses=responses)
 
                     if close_reason: break
