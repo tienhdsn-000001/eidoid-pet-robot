@@ -1,0 +1,14 @@
+# Core dependencies for Eidoid Pet Robot
+google-generativeai>=0.8.0  # Gemini API SDK (October 2025 version)
+SpeechRecognition>=3.10.0  # Voice recognition
+pyttsx3>=2.90  # Text-to-speech
+pyaudio>=0.2.13  # Audio interface for speech recognition
+
+# Optional dependencies for enhanced features
+numpy>=1.24.0  # For audio processing
+python-dotenv>=1.0.0  # Environment variable management
+
+# Raspberry Pi specific optimizations
+# Note: On Raspberry Pi, you may need to install system packages:
+# sudo apt-get install python3-pyaudio portaudio19-dev
+# sudo apt-get install espeak ffmpeg libespeak1
