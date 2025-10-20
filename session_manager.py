@@ -1,5 +1,5 @@
-# Handles the entire hardened, real-time conversation session
-# with the Gemini Live API.
+# session_manager.py
+# Streamlined session manager for Alexa and Jarvis personas
 
 import asyncio
 import time
@@ -14,16 +14,12 @@ from config import (CONFIG, LIVE_MODEL, PERSONAS, KEEPALIVE_SECONDS,
                     RECONNECT_BACKOFF_SECONDS, MAX_BACKOFF_SECONDS,
                     SESSION_SHORT_LIFETIME_S, SESSION_INFINITE_RETRY, IDLE_SECONDS,
                     VOICE_CATALOG)
-
-# --- MODIFIED: Imported new tool and instruction builder ---
-from services import (searcher, send_command_to_mcu,
-                      build_character_persona_instructions, blank_key_for_voice,
-                      client, motor_tool_decl, shutdown_tool_decl, web_search_tool_decl,
-                      persona_switch_tool_decl, character_creation_tool_decl,
+from services import (searcher, client, shutdown_tool_decl, web_search_tool_decl,
                       BASE_SYSTEM_RULES, query_persona_memories, store_persona_memory,
                       analyze_persona_personality, memory_query_tool_decl,
                       memory_store_tool_decl, personality_analysis_tool_decl)
 from utils import says_shutdown
+from led_controller import led_controller
 
 # =========================
 # Gemini Live Session Main Function
@@ -31,27 +27,22 @@ from utils import says_shutdown
 async def gemini_live_session():
     """
     Manages a persistent, auto-reconnecting conversation with the Gemini Live API.
-    This function will loop internally, trying to maintain a connection, and will
-    only exit fully upon an explicit shutdown command or idle timeout.
+    Streamlined for Alexa and Jarvis personas only.
     """
     state.set_state(state.RobotState.LISTENING)
 
     # !!! IMPORTANT !!!
     # Replace None with the device indices from list_audio_devices.py
-    # For Phase 1, Mic is your computer's mic. For Phase 2, it's your USB mic.
-    # The speaker should be your USB speaker for both phases.
     MIC_DEVICE_INDEX = None 
     SPEAKER_DEVICE_INDEX = None
 
     p = pyaudio.PyAudio()
 
-    # --- MODIFIED: Added input_device_index ---
     mic_stream = p.open(format=CONFIG["audio"]["format"], channels=CONFIG["audio"]["channels"],
                         rate=CONFIG["audio"]["rate"], input=True,
                         frames_per_buffer=CONFIG["audio"]["chunk_size"],
                         input_device_index=MIC_DEVICE_INDEX)
                         
-    # --- MODIFIED: Added output_device_index ---
     spk_stream = p.open(format=pyaudio.paInt16, channels=CONFIG["audio"]["channels"],
                         rate=CONFIG["audio"]["speaker_rate"], output=True,
                         frames_per_buffer=CONFIG["audio"]["chunk_size"],
@@ -68,16 +59,12 @@ async def gemini_live_session():
         start_of_session = time.monotonic()
         last_activity = start_of_session
 
-        pending_voice = state.active_voice_name
-        pending_persona_key = state.active_persona_key
-
         def touch():
             nonlocal last_activity
             last_activity = time.monotonic()
 
         def compose_system_instruction():
-            persona = PERSONAS.get(state.active_persona_key, {"prompt": "", "voice": "Kore"})
-            extra = state.session_custom_instructions or ""
+            persona = PERSONAS.get(state.active_persona_key, {"prompt": "", "voice": "Charon"})
             memory = state.render_memory_recency()
             brevity_guard = (
                 "Always keep answers to 1–2 sentences unless the user explicitly asks for more "
@@ -85,20 +72,18 @@ async def gemini_live_session():
             )
             return (
                 (persona["prompt"] + "\n\n" if persona["prompt"] else "") +
-                BASE_SYSTEM_RULES + "\n" + brevity_guard + "\n" +
-                (("\n" + extra) if extra else "") +
-                "\n\n" + memory
+                BASE_SYSTEM_RULES + "\n" + brevity_guard + "\n\n" + memory
             )
 
         def build_live_config():
-            # --- MODIFIED: Add the new character creation tool to the list ---
-            all_tools = [motor_tool_decl, shutdown_tool_decl, web_search_tool_decl, persona_switch_tool_decl]
-            if state.concierge_waiting_for_description:
-                 all_tools.append(character_creation_tool_decl)
-            
-            # Add memory tools for Jarvis and Alexa personas
-            if state.active_persona_key in ["jarvis", "alexa"]:
-                all_tools.extend([memory_query_tool_decl, memory_store_tool_decl, personality_analysis_tool_decl])
+            # Tools available to both Alexa and Jarvis
+            all_tools = [
+                shutdown_tool_decl, 
+                web_search_tool_decl,
+                memory_query_tool_decl, 
+                memory_store_tool_decl, 
+                personality_analysis_tool_decl
+            ]
 
             return {
                 "system_instruction": compose_system_instruction(),
@@ -107,21 +92,17 @@ async def gemini_live_session():
                 "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": state.active_voice_name}}},
             }
         
-        # --- NEW: Updated model ID based on Oct 2025 documentation ---
         live_model_id = LIVE_MODEL
 
         try:
-            print(f"[SESSION] Starting Gemini Live with model {live_model_id}...")
+            print(f"[SESSION] Starting Gemini Live with model {live_model_id} as {state.active_persona_key}...")
             async with client.aio.live.connect(model=live_model_id, config=build_live_config()) as session:
                 reconnect_attempt = 0
                 backoff = RECONNECT_BACKOFF_SECONDS
-                print("[SESSION] Connected")
+                print(f"[SESSION] Connected as {state.active_persona_key}")
                 touch()
 
-                if state.startup_hint:
-                    await session.send_realtime_input(text=state.startup_hint)
-                    state.set_session_state(hint=None, is_concierge_waiting=state.concierge_waiting_for_description)
-
+                # Keepalive task
                 async def keepalive():
                     while True:
                         await asyncio.sleep(KEEPALIVE_SECONDS)
@@ -131,6 +112,7 @@ async def gemini_live_session():
                             break
                 keepalive_task = asyncio.create_task(keepalive())
 
+                # Microphone input generator
                 async def mic_gen():
                     while state.current_state == state.RobotState.LISTENING:
                         chunk = await asyncio.to_thread(mic_stream.read, CONFIG["audio"]["chunk_size"], False)
@@ -140,6 +122,7 @@ async def gemini_live_session():
                         else:
                             await asyncio.sleep(0.02)
 
+                # Send audio task
                 async def send_audio():
                     try:
                         async for blob in mic_gen():
@@ -150,96 +133,82 @@ async def gemini_live_session():
 
                 is_speaking = False
                 
+                # Main message processing loop
                 async for msg in session.receive():
                     touch()
                     if getattr(msg, "go_away", None):
-                        close_reason = "go_away"; break
+                        close_reason = "go_away"
+                        break
 
+                    # Handle audio output
                     played = False
                     if hasattr(msg, "data") and isinstance(getattr(msg, "data"), (bytes, bytearray)):
-                        if not is_speaking: is_speaking = True; mic_enabled_flag["on"] = False
-                        spk_stream.write(msg.data); played = True
+                        if not is_speaking: 
+                            is_speaking = True
+                            mic_enabled_flag["on"] = False
+                            led_controller.pulse_start()  # Start pulsing LED while speaking
+                        spk_stream.write(msg.data)
+                        played = True
 
+                    # Handle server content
                     sc = getattr(msg, "server_content", None)
                     if sc:
+                        # Handle input transcription
                         in_tr = getattr(sc, "input_transcription", None)
                         if in_tr and getattr(in_tr, "text", None):
                             txt = (in_tr.text or "").strip()
                             if txt:
                                 state.add_user_utt(txt)
                                 if says_shutdown(txt):
-                                    print("[SESSION] Shutdown phrase detected in transcription.")
+                                    print("[SESSION] Shutdown phrase detected.")
                                     state.set_state(state.RobotState.SLEEPING)
                                     close_reason = "shutdown_to_sleep"
-                                # --- REMOVED: Old logic for concierge text parsing is now replaced by the tool call below ---
 
+                        # Handle output transcription
                         out_tr = getattr(sc, "output_transcription", None)
                         if out_tr and getattr(out_tr, "text", None):
                             txt = (out_tr.text or "").strip()
-                            if txt: state.add_assistant_utt(txt)
+                            if txt: 
+                                state.add_assistant_utt(txt)
 
+                    # Handle end of speech
                     if is_speaking and not played:
-                        is_speaking = False; mic_enabled_flag["on"] = True
+                        is_speaking = False
+                        mic_enabled_flag["on"] = True
+                        led_controller.pulse_stop()  # Stop pulsing when done speaking
+                        led_controller.turn_on()  # Keep LED on while listening
 
+                    # Check for idle timeout
                     if (time.monotonic() - last_activity) > IDLE_SECONDS:
-                        close_reason = "idle_timeout"; break
+                        close_reason = "idle_timeout"
+                        break
 
+                    # Handle tool calls
                     if getattr(msg, "tool_call", None) and getattr(msg.tool_call, "function_calls", None):
                         responses = []
                         for fc in msg.tool_call.function_calls:
-                            name = fc.name; args = fc.args or {}; fid = fc.id
-                            if name == "motor_command":
-                                send_command_to_mcu(args)
-                                responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK"}))
-                            elif name == "shutdown_robot":
+                            name = fc.name
+                            args = fc.args or {}
+                            fid = fc.id
+                            
+                            if name == "shutdown_robot":
                                 print("[SESSION] 'shutdown_robot' tool called.")
                                 state.set_state(state.RobotState.SLEEPING)
                                 close_reason = "shutdown_to_sleep"
                                 responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK"}))
+                            
                             elif name == "web_search":
+                                led_controller.flash(count=1, on_time=0.1, off_time=0.1)  # Quick flash for search
                                 data = searcher.search(args.get("query"), args.get("max_results"))
                                 responses.append(types.FunctionResponse(id=fid, name=name, response=data))
-                            # --- NEW: Handle the character creation tool call ---
-                            elif name == "save_character_profile":
-                                print("[SESSION] 'save_character_profile' tool called.")
-                                char_name = args.get("name")
-                                char_world = args.get("world")
-                                char_personality = args.get("personality")
-                                char_voice = args.get("voice")
-
-                                if char_name and char_world and char_personality and char_voice in VOICE_CATALOG:
-                                    custom_instr = build_character_persona_instructions(
-                                        name=char_name,
-                                        world=char_world,
-                                        personality=char_personality
-                                    )
-                                    # Set up the state for the *next* session
-                                    state.set_session_state(is_concierge_waiting=False, custom_instructions=custom_instr)
-                                    pending_voice = char_voice
-                                    pending_persona_key = blank_key_for_voice(char_voice)
-                                    close_reason = "persona_switch"
-                                    responses.append(types.FunctionResponse(id=fid, name=name, response={"status": "OK"}))
-                                else:
-                                    responses.append(types.FunctionResponse(id=fid, name=name, response={"status": "ERROR", "message": "Missing required character profile fields."}))
-
-                            elif name == "persona_switch":
-                                pk = args.get("persona_key"); vn = args.get("voice_name"); ci = args.get("custom_instructions")
-                                if pk and pk in PERSONAS:
-                                    pending_persona_key = pk; pending_voice = PERSONAS[pk]["voice"]; state.session_custom_instructions = ci
-                                    close_reason="persona_switch"
-                                    responses.append(types.FunctionResponse(id=fid,name=name,response={"status":"OK"}))
-                                elif vn and vn in VOICE_CATALOG:
-                                    pending_voice = vn; pending_persona_key = blank_key_for_voice(vn); state.session_custom_instructions = ci
-                                    close_reason="persona_switch"
-                                    responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK"}))
-                                else:
-                                    responses.append(types.FunctionResponse(id=fid,name=name,response={"status":"ERROR"}))
+                            
                             elif name == "query_memories":
                                 query = args.get("query", "")
                                 memory_type = args.get("memory_type", "all")
                                 max_results = args.get("max_results", 5)
                                 result = query_persona_memories(state.active_persona_key, query, memory_type, max_results)
                                 responses.append(types.FunctionResponse(id=fid, name=name, response=result))
+                            
                             elif name == "store_important_memory":
                                 content = args.get("content")
                                 memory_type = args.get("memory_type")
@@ -250,36 +219,50 @@ async def gemini_live_session():
                                     responses.append(types.FunctionResponse(id=fid, name=name, response=result))
                                 else:
                                     responses.append(types.FunctionResponse(id=fid, name=name, response={"status": "ERROR", "message": "Missing required parameters"}))
+                            
                             elif name == "analyze_personality_development":
                                 include_history = args.get("include_history", False)
                                 result = analyze_persona_personality(state.active_persona_key, include_history)
                                 responses.append(types.FunctionResponse(id=fid, name=name, response=result))
-                        if responses: await session.send_tool_response(function_responses=responses)
+                        
+                        if responses: 
+                            await session.send_tool_response(function_responses=responses)
 
-                    if close_reason: break
-                if not close_reason: close_reason = "server_closed"
+                    if close_reason: 
+                        break
+                
+                if not close_reason: 
+                    close_reason = "server_closed"
 
-        except (ConnectionClosed, ConnectionClosedOK): close_reason = "server_closed"
-        except Exception as e: close_reason = f"error: {e}"
+        except (ConnectionClosed, ConnectionClosedOK): 
+            close_reason = "server_closed"
+        except Exception as e: 
+            close_reason = f"error: {e}"
         finally:
-            if keepalive_task: keepalive_task.cancel()
-            if send_task: send_task.cancel()
+            if keepalive_task: 
+                keepalive_task.cancel()
+            if send_task: 
+                send_task.cancel()
             print(f"[SESSION] Closing session. Reason: {close_reason or 'client'}", file=sys.stderr)
-
-        if close_reason == "persona_switch":
-            state.set_persona(pending_persona_key, pending_voice)
-            await asyncio.sleep(RECONNECT_BACKOFF_SECONDS); continue
+            led_controller.turn_off()  # Turn off LED when session ends
 
         if state.current_state != state.RobotState.LISTENING:
             break
 
+        # Handle reconnection logic
         if close_reason == "server_closed" or (time.monotonic() - start_of_session) < SESSION_SHORT_LIFETIME_S:
-            if not SESSION_INFINITE_RETRY and reconnect_attempt >= 3: break
+            if not SESSION_INFINITE_RETRY and reconnect_attempt >= 3: 
+                break
             reconnect_attempt += 1
-            await asyncio.sleep(backoff); backoff = min(backoff * 1.7, MAX_BACKOFF_SECONDS); continue
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 1.7, MAX_BACKOFF_SECONDS)
+            continue
         
         break
 
-    if mic_stream: mic_stream.close()
-    if spk_stream: spk_stream.close()
-    if p: p.terminate()
+    if mic_stream: 
+        mic_stream.close()
+    if spk_stream: 
+        spk_stream.close()
+    if p: 
+        p.terminate()

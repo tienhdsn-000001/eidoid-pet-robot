@@ -1,6 +1,5 @@
 # state.py
-# Manages the robot's current state (sleeping, waking, listening)
-# and conversation history.
+# Manages the robot's current state and conversation history
 
 import time
 from collections import deque
@@ -19,15 +18,12 @@ class RobotState:
 # Global State Variables
 # =========================
 current_state = RobotState.SLEEPING
-active_persona_key = "aoede_concierge"
-active_voice_name = "Aoede"
-last_session_end = 0.0 # <-- BUG FIX: Added the missing variable
+active_persona_key = "jarvis"  # Default to Jarvis
+active_voice_name = "Charon"
+last_session_end = 0.0
 
 # Session-specific state
 conversation_buffer = deque(maxlen=CONVO_MAX_TURNS)
-session_custom_instructions = None
-concierge_waiting_for_description = False
-startup_hint = None
 
 # Memory manager reference
 current_memory_manager = None
@@ -46,29 +42,15 @@ def set_persona(persona_key, voice_name):
     # Initialize memory manager for the persona
     current_memory_manager = get_memory_manager(persona_key)
 
-def set_session_state(hint=None, is_concierge_waiting=False, custom_instructions=None):
-    global startup_hint, concierge_waiting_for_description, session_custom_instructions
-    startup_hint = hint
-    concierge_waiting_for_description = is_concierge_waiting
-    session_custom_instructions = custom_instructions
-
 def reset_session_state():
     """Clears all temporary session data and records the session end time."""
-    global conversation_buffer, session_custom_instructions, concierge_waiting_for_description, startup_hint, last_session_end
+    global conversation_buffer, last_session_end
     conversation_buffer.clear()
-    session_custom_instructions = None
-    concierge_waiting_for_description = False
-    startup_hint = None
-    # BUG FIX: Update the timestamp when a session ends for the cooldown logic.
     last_session_end = time.monotonic()
     
     # Save memories when session ends
     if current_memory_manager:
         current_memory_manager.save_memories()
-
-def cleanup_memories():
-    """Save all memories and perform cleanup."""
-    cleanup_all_memories()
 
 def add_user_utt(text: str):
     if text: 
@@ -98,3 +80,6 @@ def render_memory_recency():
         lines.append(f"{who}: {t}")
     return "Recent context:\n" + "\n".join(lines)
 
+def cleanup_memories():
+    """Save all memories and perform cleanup."""
+    cleanup_all_memories()
