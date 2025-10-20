@@ -82,6 +82,7 @@ target/
 
 # IPython
 profile_default/
+data/
 ipython_config.py
 
 # pyenv

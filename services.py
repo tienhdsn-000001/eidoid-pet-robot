@@ -33,6 +33,7 @@ except Exception:
 
 from google import genai
 from config import CONFIG, PERSONAS, VOICE_CATALOG, SIMULATE_MOTOR_HEAD
+import memory as persona_memory
 
 # =========================
 # Gemini Client
@@ -47,6 +48,10 @@ BASE_SYSTEM_RULES = (
     "POLICY:\n"
     "- Default to brevity: 1–2 sentences. Expand ONLY if the user clearly asks for more detail.\n"
     "- Avoid filler. Be direct and useful.\n"
+    "MEMORY:\n"
+    "- Use `save_memory` to store durable facts about the user, preferences, tasks, or your own evolving personality.\n"
+    "- Use `update_personality` sparingly to add stable traits or style notes after meaningful interactions.\n"
+    "- Use `recall_memory` before answering if prior facts could matter.\n"
     "TOOLS:\n"
     "- You DO have a `web_search` tool. For factual/current events, call `web_search` first, then answer clearly.\n"
     "- If the user says 'Thank you for your time', call `shutdown_robot` and say nothing else.\n"
@@ -146,6 +151,78 @@ character_creation_tool_decl = {
     ]
 }
 
+# --- NEW: Memory tool declarations (save/recall/update personality/profile) ---
+memory_tool_decl = {
+    "function_declarations": [
+        {
+            "name": "save_memory",
+            "description": (
+                "Persist a concise memory relevant to the user, context, or persona. "
+                "Use for preferences, ongoing tasks, facts, or reflections."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The memory text to store."},
+                    "category": {
+                        "type": "string",
+                        "description": "Memory category",
+                        "enum": [
+                            "fact",
+                            "preference",
+                            "task",
+                            "relationship",
+                            "reflection",
+                            "personality_trait",
+                        ],
+                    },
+                    "scope": {"type": "string", "enum": ["short", "long"], "description": "Short (ephemeral) or long (persistent)."},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "importance": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["text"],
+            },
+        },
+        {
+            "name": "recall_memory",
+            "description": "Retrieve most relevant memories for the active persona.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Optional query to focus recall."},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 25},
+                    "categories": {"type": "array", "items": {"type": "string"}},
+                    "include_short_term": {"type": "boolean"},
+                },
+            },
+        },
+        {
+            "name": "update_personality",
+            "description": "Update persona traits/style notes after meaningful development.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "traits_add": {"type": "array", "items": {"type": "string"}},
+                    "style_notes": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "save_profile",
+            "description": "Save or update the persona's core profile (name, world, personality, voice).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "world": {"type": "string"},
+                    "personality": {"type": "string"},
+                    "voice": {"type": "string", "enum": list(VOICE_CATALOG.keys())},
+                },
+            },
+        },
+    ]
+}
+
 
 # =========================
 # Motor I/O (sim or serial)
@@ -204,6 +281,22 @@ def send_command_to_mcu(command_json: dict):
         "duration_s": float(command_json.get("duration_s", 0.0))
     }
     serial_mgr.send_json_line(safe)
+
+
+# =========================
+# Memory convenience functions (for potential non-tool use)
+# =========================
+def memory_save(persona_key: str, **kwargs):
+    return persona_memory.save(persona_key, **kwargs)
+
+def memory_recall(persona_key: str, **kwargs):
+    return persona_memory.recall(persona_key, **kwargs)
+
+def memory_update_personality(persona_key: str, **kwargs):
+    return persona_memory.update_personality(persona_key, **kwargs)
+
+def memory_save_profile(persona_key: str, **kwargs):
+    return persona_memory.save_profile(persona_key, **kwargs)
 
 # =========================
 # Search (DDG + Wikipedia)

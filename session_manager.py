@@ -18,9 +18,10 @@ from config import (CONFIG, LIVE_MODEL, PERSONAS, KEEPALIVE_SECONDS,
 # --- MODIFIED: Imported new tool and instruction builder ---
 from services import (searcher, send_command_to_mcu,
                       build_character_persona_instructions, blank_key_for_voice,
-                      client, motor_tool_decl, shutdown_tool_decl, web_search_tool_decl,
+                      client, shutdown_tool_decl, web_search_tool_decl,
                       persona_switch_tool_decl, character_creation_tool_decl,
-                      BASE_SYSTEM_RULES)
+                      BASE_SYSTEM_RULES, memory_tool_decl)
+import memory as persona_memory
 from utils import says_shutdown
 
 # =========================
@@ -77,6 +78,8 @@ async def gemini_live_session():
             persona = PERSONAS.get(state.active_persona_key, {"prompt": "", "voice": "Kore"})
             extra = state.session_custom_instructions or ""
             memory = state.render_memory_recency()
+            # Long-term persona memory summary (profile + salient memories)
+            persona_long_term = persona_memory.render_system_memory(state.active_persona_key, max_chars=1200)
             brevity_guard = (
                 "Always keep answers to 1–2 sentences unless the user explicitly asks for more "
                 "(e.g., 'explain', 'details', 'teach me')."
@@ -84,13 +87,15 @@ async def gemini_live_session():
             return (
                 (persona["prompt"] + "\n\n" if persona["prompt"] else "") +
                 BASE_SYSTEM_RULES + "\n" + brevity_guard + "\n" +
+                (persona_long_term + "\n\n" if persona_long_term else "") +
                 (("\n" + extra) if extra else "") +
                 "\n\n" + memory
             )
 
         def build_live_config():
             # --- MODIFIED: Add the new character creation tool to the list ---
-            all_tools = [motor_tool_decl, shutdown_tool_decl, web_search_tool_decl, persona_switch_tool_decl]
+            # Motor tool removed for now (commented out in services). Use shutdown/search/persona/memory tools.
+            all_tools = [shutdown_tool_decl, web_search_tool_decl, persona_switch_tool_decl, memory_tool_decl]
             if state.concierge_waiting_for_description:
                  all_tools.append(character_creation_tool_decl)
 
@@ -183,8 +188,8 @@ async def gemini_live_session():
                         for fc in msg.tool_call.function_calls:
                             name = fc.name; args = fc.args or {}; fid = fc.id
                             if name == "motor_command":
-                                send_command_to_mcu(args)
-                                responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK"}))
+                                # Motor tool currently disabled/commented; respond with error to guide model
+                                responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"ERROR","message":"motor_command disabled"}))
                             elif name == "shutdown_robot":
                                 print("[SESSION] 'shutdown_robot' tool called.")
                                 state.set_state(state.RobotState.SLEEPING)
@@ -193,6 +198,42 @@ async def gemini_live_session():
                             elif name == "web_search":
                                 data = searcher.search(args.get("query"), args.get("max_results"))
                                 responses.append(types.FunctionResponse(id=fid, name=name, response=data))
+                            # --- NEW: Memory tools ---
+                            elif name == "save_memory":
+                                saved = persona_memory.save(
+                                    state.active_persona_key,
+                                    text=args.get("text") or "",
+                                    category=args.get("category") or "fact",
+                                    scope=args.get("scope") or "long",
+                                    tags=args.get("tags") or [],
+                                    importance=args.get("importance") if args.get("importance") is not None else 0.5,
+                                )
+                                responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK","item":saved}))
+                            elif name == "recall_memory":
+                                items = persona_memory.recall(
+                                    state.active_persona_key,
+                                    query=args.get("query"),
+                                    top_k=args.get("top_k") or 5,
+                                    categories=args.get("categories") or None,
+                                    include_short_term=bool(args.get("include_short_term")) if args.get("include_short_term") is not None else True,
+                                )
+                                responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK","items":items}))
+                            elif name == "update_personality":
+                                updated = persona_memory.update_personality(
+                                    state.active_persona_key,
+                                    traits_add=args.get("traits_add") or [],
+                                    style_notes=args.get("style_notes"),
+                                )
+                                responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK","profile":updated}))
+                            elif name == "save_profile":
+                                prof = persona_memory.save_profile(
+                                    state.active_persona_key,
+                                    name=args.get("name"),
+                                    world=args.get("world"),
+                                    personality=args.get("personality"),
+                                    voice=args.get("voice"),
+                                )
+                                responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK","profile":prof}))
                             # --- NEW: Handle the character creation tool call ---
                             elif name == "save_character_profile":
                                 print("[SESSION] 'save_character_profile' tool called.")
@@ -207,10 +248,27 @@ async def gemini_live_session():
                                         world=char_world,
                                         personality=char_personality
                                     )
+                                    # Persist a long-term profile and seed memories under the pending persona key
+                                    target_pk = blank_key_for_voice(char_voice)
+                                    persona_memory.save_profile(
+                                        persona_key=target_pk,
+                                        name=char_name,
+                                        world=char_world,
+                                        personality=char_personality,
+                                        voice=char_voice,
+                                    )
+                                    persona_memory.save(
+                                        target_pk,
+                                        text=f"Created character profile: {char_name} from {char_world}. Personality: {char_personality}",
+                                        category="fact",
+                                        scope="long",
+                                        tags=["character_profile"],
+                                        importance=0.8,
+                                    )
                                     # Set up the state for the *next* session
                                     state.set_session_state(is_concierge_waiting=False, custom_instructions=custom_instr)
                                     pending_voice = char_voice
-                                    pending_persona_key = blank_key_for_voice(char_voice)
+                                    pending_persona_key = target_pk
                                     close_reason = "persona_switch"
                                     responses.append(types.FunctionResponse(id=fid, name=name, response={"status": "OK"}))
                                 else:
