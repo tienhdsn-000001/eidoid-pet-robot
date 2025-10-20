@@ -144,6 +144,10 @@ async def gemini_live_session():
 
                 is_speaking = False
                 
+                # Track recent user/assistant pairs for intelligent memory processing
+                last_user_utterance = None
+                interaction_analyses = []
+                
                 async for msg in session.receive():
                     touch()
                     if getattr(msg, "go_away", None):
@@ -161,6 +165,38 @@ async def gemini_live_session():
                             txt = (in_tr.text or "").strip()
                             if txt:
                                 state.add_user_utt(txt)
+                                last_user_utterance = txt
+                                
+                                # Intelligent memory processing for user input
+                                if ENABLE_LONG_TERM_MEMORY:
+                                    mem = state.get_current_memory()
+                                    
+                                    # Extract and store user facts
+                                    facts = memory_intelligence.extract_user_facts(txt)
+                                    for fact, category in facts:
+                                        mem.learn_user_fact(fact, confidence=0.8)
+                                        print(f"[MEMORY] Learned fact: {fact}")
+                                    
+                                    # Identify and track topics
+                                    topics = memory_intelligence.identify_topics(txt)
+                                    for topic in topics:
+                                        mem.track_conversation_topic(topic)
+                                    
+                                    # Detect emotional tone for rapport building
+                                    emotion = memory_intelligence.detect_emotion(txt)
+                                    if emotion:
+                                        emotion_type, intensity = emotion
+                                        if emotion_type == "positive" and intensity > 0.5:
+                                            mem.add_rapport_indicator(
+                                                f"User expressed positive emotion: {txt[:50]}",
+                                                positive=True
+                                            )
+                                        elif emotion_type == "negative":
+                                            mem.add_rapport_indicator(
+                                                f"User expressed negative emotion: {txt[:50]}",
+                                                positive=False
+                                            )
+                                
                                 if says_shutdown(txt):
                                     print("[SESSION] Shutdown phrase detected in transcription.")
                                     state.set_state(state.RobotState.SLEEPING)
@@ -170,7 +206,35 @@ async def gemini_live_session():
                         out_tr = getattr(sc, "output_transcription", None)
                         if out_tr and getattr(out_tr, "text", None):
                             txt = (out_tr.text or "").strip()
-                            if txt: state.add_assistant_utt(txt)
+                            if txt:
+                                state.add_assistant_utt(txt)
+                                
+                                # Analyze interaction quality if we have both user and assistant utterances
+                                if ENABLE_PERSONALITY_DEVELOPMENT and last_user_utterance:
+                                    analysis = memory_intelligence.analyze_interaction_quality(
+                                        last_user_utterance, txt
+                                    )
+                                    interaction_analyses.append(analysis)
+                                    
+                                    # Keep only recent analyses (last 10 interactions)
+                                    if len(interaction_analyses) > 10:
+                                        interaction_analyses = interaction_analyses[-10:]
+                                    
+                                    # Periodically adjust personality traits
+                                    if len(interaction_analyses) >= 5:
+                                        mem = state.get_current_memory()
+                                        current_traits = mem.personality_traits
+                                        
+                                        suggested_traits = memory_intelligence.suggest_personality_adjustments(
+                                            interaction_analyses[-5:],
+                                            current_traits
+                                        )
+                                        
+                                        for trait, value in suggested_traits.items():
+                                            mem.develop_personality_trait(trait, value)
+                                            print(f"[MEMORY] Personality trait '{trait}' adjusted to {value:.2f}")
+                                    
+                                    last_user_utterance = None  # Reset for next interaction
 
                     if is_speaking and not played:
                         is_speaking = False; mic_enabled_flag["on"] = True
@@ -254,6 +318,12 @@ async def gemini_live_session():
         
         break
 
+    # Save memory before closing streams
+    if state.active_persona_key:
+        mem = state.get_current_memory()
+        mem.save_memory()
+        print(f"[MEMORY] Session complete. Memory saved for {state.active_persona_key}")
+    
     if mic_stream: mic_stream.close()
     if spk_stream: spk_stream.close()
     if p: p.terminate()
