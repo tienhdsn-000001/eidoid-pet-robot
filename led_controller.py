@@ -79,13 +79,21 @@ class LEDController:
 
     # ---------- Discovery ----------
     def _discover_port(self, configured):
-        if configured and "/dev/cu." in configured: return configured
-        if configured and configured.startswith("/dev/tty."):
-            guess = configured.replace("/dev/tty.", "/dev/cu.")
-            if glob.glob(guess): return guess
-        cu_list  = sorted(glob.glob("/dev/cu.usbmodem*"))
-        tty_list = sorted(glob.glob("/dev/tty.usbmodem*"))
-        return (cu_list + tty_list or [configured])[0]
+        # Raspberry Pi 5 USB serial device discovery
+        if configured and "/dev/ttyUSB" in configured: return configured
+        if configured and "/dev/ttyACM" in configured: return configured
+        
+        # Look for common Raspberry Pi 5 USB serial devices
+        usb_devices = []
+        usb_devices.extend(glob.glob("/dev/ttyUSB*"))
+        usb_devices.extend(glob.glob("/dev/ttyACM*"))
+        usb_devices.extend(glob.glob("/dev/tty.usbmodem*"))
+        
+        if usb_devices:
+            return sorted(usb_devices)[0]
+        
+        # Fallback to configured port
+        return configured
 
     # ---------- Connection ----------
     def _connect(self):

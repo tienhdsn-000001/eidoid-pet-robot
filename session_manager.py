@@ -28,6 +28,67 @@ from services import (searcher, send_command_to_mcu,
 from utils import says_shutdown
 
 # =========================
+# USB Audio Detection for Raspberry Pi 5
+# =========================
+def _detect_usb_microphone():
+    """
+    Auto-detect USB microphone device index for Raspberry Pi 5.
+    Returns None if no USB microphone is found.
+    """
+    try:
+        p = pyaudio.PyAudio()
+        info = p.get_host_api_info_by_index(0)
+        num_devices = info.get('deviceCount')
+        
+        for i in range(num_devices):
+            device_info = p.get_device_info_by_host_api_device_index(0, i)
+            device_name = device_info.get('name', '').lower()
+            
+            # Look for USB audio devices
+            if (device_info.get('maxInputChannels') > 0 and 
+                any(keyword in device_name for keyword in ['usb', 'audio', 'microphone', 'mic'])):
+                print(f"[SESSION] Found USB microphone: Device {i} - {device_info.get('name')}")
+                p.terminate()
+                return i
+        
+        print("[SESSION] No USB microphone found, using default device")
+        p.terminate()
+        return None
+        
+    except Exception as e:
+        print(f"[SESSION] Error detecting USB microphone: {e}")
+        return None
+
+def _detect_usb_speaker():
+    """
+    Auto-detect USB speaker device index for Raspberry Pi 5.
+    Returns None if no USB speaker is found.
+    """
+    try:
+        p = pyaudio.PyAudio()
+        info = p.get_host_api_info_by_index(0)
+        num_devices = info.get('deviceCount')
+        
+        for i in range(num_devices):
+            device_info = p.get_device_info_by_host_api_device_index(0, i)
+            device_name = device_info.get('name', '').lower()
+            
+            # Look for USB audio devices
+            if (device_info.get('maxOutputChannels') > 0 and 
+                any(keyword in device_name for keyword in ['usb', 'audio', 'speaker', 'headphone'])):
+                print(f"[SESSION] Found USB speaker: Device {i} - {device_info.get('name')}")
+                p.terminate()
+                return i
+        
+        print("[SESSION] No USB speaker found, using default device")
+        p.terminate()
+        return None
+        
+    except Exception as e:
+        print(f"[SESSION] Error detecting USB speaker: {e}")
+        return None
+
+# =========================
 # Gemini Live Session Main Function
 # =========================
 async def gemini_live_session():
@@ -63,11 +124,10 @@ async def gemini_live_session():
         print("[FIRESTORE] No Firestore memory available")
 
     # !!! IMPORTANT !!!
-    # Replace None with the device indices from list_audio_devices.py
-    # For Phase 1, Mic is your computer's mic. For Phase 2, it's your USB mic.
-    # The speaker should be your USB speaker for both phases.
-    MIC_DEVICE_INDEX = None 
-    SPEAKER_DEVICE_INDEX = None
+    # Auto-detect USB audio devices for Raspberry Pi 5
+    # Run list_audio_devices.py to find the correct device indices
+    MIC_DEVICE_INDEX = _detect_usb_microphone()
+    SPEAKER_DEVICE_INDEX = _detect_usb_speaker()
 
     p = pyaudio.PyAudio()
 

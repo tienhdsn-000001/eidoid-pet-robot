@@ -16,6 +16,38 @@ import state
 from config import CONFIG, DESIRED_WAKE_MODELS, WAKE_THRESH, POST_SESSION_COOLDOWN_S, ARMING_DELAY_S, PERSONAS
 from utils import pretty_model_name, canonical_model_key
 
+# =========================
+# USB Audio Detection for Raspberry Pi 5
+# =========================
+def _detect_usb_microphone():
+    """
+    Auto-detect USB microphone device index for Raspberry Pi 5.
+    Returns None if no USB microphone is found.
+    """
+    try:
+        p = pyaudio.PyAudio()
+        info = p.get_host_api_info_by_index(0)
+        num_devices = info.get('deviceCount')
+        
+        for i in range(num_devices):
+            device_info = p.get_device_info_by_host_api_device_index(0, i)
+            device_name = device_info.get('name', '').lower()
+            
+            # Look for USB audio devices
+            if (device_info.get('maxInputChannels') > 0 and 
+                any(keyword in device_name for keyword in ['usb', 'audio', 'microphone', 'mic'])):
+                print(f"[WAKE_WORD] Found USB microphone: Device {i} - {device_info.get('name')}")
+                p.terminate()
+                return i
+        
+        print("[WAKE_WORD] No USB microphone found, using default device")
+        p.terminate()
+        return None
+        
+    except Exception as e:
+        print(f"[WAKE_WORD] Error detecting USB microphone: {e}")
+        return None
+
 # Suppress the benign ONNX warnings
 ort.set_default_logger_severity(3)
 
@@ -59,9 +91,9 @@ def _discover_installed_models(desired_names):
 # =========================
 def run_wake_word_listener():
     # !!! IMPORTANT !!!
-    # Replace None with the device index from list_audio_devices.py
-    # For Phase 1, this is your computer's mic. For Phase 2, your USB mic.
-    MIC_DEVICE_INDEX = None 
+    # Auto-detect USB microphone for Raspberry Pi 5
+    # Run list_audio_devices.py to find the correct device index
+    MIC_DEVICE_INDEX = _detect_usb_microphone() 
     
     backoff = 1.0
     while state.current_state == state.RobotState.SLEEPING:

@@ -148,8 +148,8 @@ CONFIG = {
         "write_timeout": 0.5,
         "open_retry_s": 1.0,
     },
-        "pico": {
-        "serial_port": "/dev/tty.usbmodem1101",
+    "pico": {
+        "serial_port": "/dev/ttyUSB0",  # Updated for Raspberry Pi 5 USB serial
         "baud_rate": 115200,
         "led_pin": 15,
         "newline": "CRLF",
@@ -160,6 +160,17 @@ CONFIG = {
         "rate": 16000,
         "speaker_rate": 24000,
         "chunk_size": 1280,
+        # Raspberry Pi 5 specific audio settings
+        "input_device_index": None,  # Will be auto-detected
+        "output_device_index": None,  # Will be auto-detected
+        "usb_mic_name": "USB Audio",  # Common USB microphone name pattern
+        "usb_speaker_name": "USB Audio",  # Common USB speaker name pattern
+    },
+    "rpi5": {
+        "gpio_led_pin": 17,  # Physical pin 11
+        "gpio_status_pin": 18,  # Physical pin 12
+        "enable_gpio": True,  # Enable GPIO control
+        "enable_usb_audio": True,  # Enable USB audio detection
     }
 }
 

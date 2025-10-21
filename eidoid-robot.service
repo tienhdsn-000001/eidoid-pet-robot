@@ -1,0 +1,27 @@
+[Unit]
+Description=Eidoid Pet Robot - AI Voice Assistant
+After=network.target sound.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/eidoid-pet-robot
+Environment=PATH=/home/pi/eidoid-pet-robot/.venv/bin
+Environment=PYTHONPATH=/home/pi/eidoid-pet-robot
+ExecStart=/home/pi/eidoid-pet-robot/.venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/pi/eidoid-pet-robot
+
+[Install]
+WantedBy=multi-user.target
