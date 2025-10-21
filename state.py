@@ -6,6 +6,7 @@ import time
 from collections import deque
 from config import CONVO_MAX_TURNS
 from memory_system import get_memory_manager, cleanup_all_memories
+from firestore_memory import get_firestore_memory
 
 # =========================
 # State Definitions
@@ -76,6 +77,16 @@ def add_user_utt(text: str):
         # Add to memory system
         if current_memory_manager:
             current_memory_manager.add_short_term_memory("user", text.strip())
+        
+        # --- NEW: Add to Firestore memory for persistent storage ---
+        firestore_memory = get_firestore_memory()
+        if firestore_memory:
+            try:
+                # This will automatically save to Firestore
+                firestore_memory.conversation_memory.chat_memory.add_user_message(text.strip())
+                print(f"[FIRESTORE] User message saved to Firestore: {text[:50]}...")
+            except Exception as e:
+                print(f"[FIRESTORE] Error saving user message: {e}")
 
 def add_assistant_utt(text: str):
     if text: 
@@ -83,18 +94,50 @@ def add_assistant_utt(text: str):
         # Add to memory system
         if current_memory_manager:
             current_memory_manager.add_short_term_memory("assistant", text.strip())
+        
+        # --- NEW: Add to Firestore memory for persistent storage ---
+        firestore_memory = get_firestore_memory()
+        if firestore_memory:
+            try:
+                # This will automatically save to Firestore
+                firestore_memory.conversation_memory.chat_memory.add_ai_message(text.strip())
+                print(f"[FIRESTORE] Assistant message saved to Firestore: {text[:50]}...")
+            except Exception as e:
+                print(f"[FIRESTORE] Error saving assistant message: {e}")
 
 def render_memory_recency():
     # Use advanced memory system if available
     if current_memory_manager:
-        return current_memory_manager.generate_context_prompt()
+        memory_context = current_memory_manager.generate_context_prompt()
+    else:
+        memory_context = ""
     
-    # Fallback to simple buffer
-    if not conversation_buffer: return "Recent context: (empty)"
-    lines=[]
-    for role, t in conversation_buffer:
-        who="User" if role=="user" else "Assistant"
-        t=(t[:300]+"…") if len(t)>300 else t
-        lines.append(f"{who}: {t}")
-    return "Recent context:\n" + "\n".join(lines)
+    # --- NEW: Add Firestore conversation context ---
+    firestore_memory = get_firestore_memory()
+    firestore_context = ""
+    if firestore_memory:
+        try:
+            firestore_context = firestore_memory.get_conversation_context(max_messages=5)
+        except Exception as e:
+            print(f"[FIRESTORE] Error getting conversation context: {e}")
+    
+    # Combine all context sources
+    context_parts = []
+    if memory_context:
+        context_parts.append(memory_context)
+    if firestore_context and firestore_context != "No previous conversation history available.":
+        context_parts.append(firestore_context)
+    
+    # Fallback to simple buffer if no other context available
+    if not context_parts:
+        if not conversation_buffer: 
+            return "Recent context: (empty)"
+        lines=[]
+        for role, t in conversation_buffer:
+            who="User" if role=="user" else "Assistant"
+            t=(t[:300]+"…") if len(t)>300 else t
+            lines.append(f"{who}: {t}")
+        return "Recent context:\n" + "\n".join(lines)
+    
+    return "\n\n".join(context_parts)
 

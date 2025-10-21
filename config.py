@@ -10,6 +10,13 @@ import pyaudio
 LIVE_MODEL = "gemini-live-2.5-flash-preview"
 
 # =========================
+# Firestore Configuration
+# =========================
+# Replace with your actual Google Cloud Project ID
+FIRESTORE_PROJECT_ID = "your-gcp-project-id"  # TODO: Replace with actual project ID
+CHAT_COLLECTION_NAME = "classroom-chat-history"
+
+# =========================
 # Tunables
 # =========================
 # --- DEPRECATED: Motor functions are disabled in main.py ---

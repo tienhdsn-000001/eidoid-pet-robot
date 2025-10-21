@@ -5,6 +5,7 @@ import asyncio
 import time
 import os
 import sys
+import uuid
 
 # Import project modules
 import state
@@ -14,11 +15,18 @@ from session_manager import gemini_live_session
 # from services import serial_mgr
 # --- NEW: Import the LED controller ---
 from led_controller import led_controller
+# --- NEW: Import Firestore memory management ---
+from firestore_memory import initialize_firestore_memory, cleanup_firestore_memory
 
 
 def main():
     """The main application loop."""
     try:
+        # --- NEW: Initialize Firestore memory with unique session ID ---
+        session_id = str(uuid.uuid4())
+        print(f"[MAIN] Starting new session with ID: {session_id}")
+        initialize_firestore_memory(session_id)
+        
         # --- NEW: Turn LEDs off at startup just in case ---
         led_controller.turn_off()
         while True:
@@ -57,12 +65,20 @@ def main():
         led_controller.turn_off()
         # Save all memories before exit
         state.cleanup_memories()
+        # --- NEW: Cleanup Firestore memory ---
+        cleanup_firestore_memory()
         print("[MAIN] Cleanup complete. Exiting.")
 
 if __name__ == "__main__":
     # Ensure the API key is set before starting.
     if not os.getenv("GOOGLE_API_KEY"):
         print("[ERROR] GOOGLE_API_KEY environment variable not set.")
+        sys.exit(1)
+    
+    # Ensure Firestore credentials are set before starting.
+    if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+        print("[ERROR] GOOGLE_APPLICATION_CREDENTIALS environment variable not set.")
+        print("Please set it to the path of your service account key JSON file.")
         sys.exit(1)
     
     # Start the robot.

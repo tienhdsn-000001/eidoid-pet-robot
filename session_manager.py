@@ -14,6 +14,7 @@ from config import (CONFIG, LIVE_MODEL, PERSONAS, KEEPALIVE_SECONDS,
                     RECONNECT_BACKOFF_SECONDS, MAX_BACKOFF_SECONDS,
                     SESSION_SHORT_LIFETIME_S, SESSION_INFINITE_RETRY, IDLE_SECONDS,
                     VOICE_CATALOG)
+from firestore_memory import get_firestore_memory
 
 # --- MODIFIED: Imported new tool and instruction builder ---
 from services import (searcher, send_command_to_mcu,
@@ -35,6 +36,30 @@ async def gemini_live_session():
     only exit fully upon an explicit shutdown command or idle timeout.
     """
     state.set_state(state.RobotState.LISTENING)
+    
+    # --- NEW: Load conversation history from Firestore ---
+    firestore_memory = get_firestore_memory()
+    if firestore_memory:
+        try:
+            # Load recent messages from Firestore into the conversation buffer
+            recent_messages = firestore_memory.get_recent_messages(count=20)
+            print(f"[FIRESTORE] Loaded {len(recent_messages)} messages from Firestore")
+            
+            # Add messages to the conversation buffer for context
+            for message in recent_messages:
+                if hasattr(message, 'content'):
+                    if hasattr(message, 'type'):
+                        if message.type == 'human':
+                            state.add_user_utt(message.content)
+                        elif message.type == 'ai':
+                            state.add_assistant_utt(message.content)
+                    else:
+                        # Fallback: assume alternating user/assistant based on position
+                        pass  # We'll let the normal flow handle this
+        except Exception as e:
+            print(f"[FIRESTORE] Error loading conversation history: {e}")
+    else:
+        print("[FIRESTORE] No Firestore memory available")
 
     # !!! IMPORTANT !!!
     # Replace None with the device indices from list_audio_devices.py
