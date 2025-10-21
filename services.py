@@ -33,6 +33,8 @@ except Exception:
 
 from google import genai
 from config import CONFIG, PERSONAS, VOICE_CATALOG, SIMULATE_MOTOR_HEAD
+from memory_system import MemoryType, MemoryImportance, get_memory_manager
+from memory_tools import memory_query_tool_decl, memory_store_tool_decl, personality_analysis_tool_decl
 
 # =========================
 # Gemini Client
@@ -50,6 +52,11 @@ BASE_SYSTEM_RULES = (
     "TOOLS:\n"
     "- You DO have a `web_search` tool. For factual/current events, call `web_search` first, then answer clearly.\n"
     "- If the user says 'Thank you for your time', call `shutdown_robot` and say nothing else.\n"
+    "MEMORY (Jarvis/Alexa only):\n"
+    "- You have access to memory tools: `query_memories`, `store_important_memory`, and `analyze_personality_development`.\n"
+    "- Use `query_memories` to recall past conversations, user preferences, or shared experiences.\n"
+    "- Use `store_important_memory` when the user shares significant information worth remembering.\n"
+    "- Your personality evolves based on interactions - be consistent with your developing traits.\n"
     #"If you are Jarvis or Alexa, never use the persona switch or character creation tool. To Jarvis and Alexa, they do not exist and are EXCLUSIVELY for Leda the Concierge's use."
     # --- MODIFIED: The following rules are now handled by the Concierge persona's specific prompt ---
     #"- If the user asks about weather and no persona is chosen, answer the weather, then (as Aoede) say out loud: "
@@ -58,7 +65,7 @@ BASE_SYSTEM_RULES = (
 )
 
 # --- MODIFIED: Updated motor_command tool to accept direction and duration ---
-'''motor_tool_decl = {
+motor_tool_decl = {
     "function_declarations": [
         {
             "name": "motor_command",
@@ -85,7 +92,6 @@ BASE_SYSTEM_RULES = (
         }
     ]
 }
-'''
 shutdown_tool_decl = {
     "function_declarations":[
         {"name":"shutdown_robot","description":"Return to wake-word listening.","parameters":{}}
@@ -325,3 +331,90 @@ def build_character_persona_instructions(name: str, world: str, personality: str
         "- Your voice is already configured. You will speak as this character.\n"
         "- To end the conversation, the user will say 'Thank you for your time' and you must call the `shutdown_robot` tool."
     )
+
+# =========================
+# Memory Management Functions
+# =========================
+def query_persona_memories(persona_key: str, query: str, memory_type: str = "all", max_results: int = 5):
+    """Query memories for a specific persona."""
+    memory_mgr = get_memory_manager(persona_key)
+    
+    if memory_type == "all":
+        # Get relevant memories based on query
+        memories = memory_mgr.get_relevant_memories(query, max_results)
+    else:
+        # Filter by type
+        memory_type_enum = MemoryType(memory_type)
+        memory_ids = memory_mgr.memory_by_type.get(memory_type_enum, [])
+        all_memories = [memory_mgr.long_term_memory[mid] for mid in memory_ids if mid in memory_mgr.long_term_memory]
+        
+        # Simple relevance scoring
+        scored_memories = []
+        query_words = set(query.lower().split())
+        for memory in all_memories:
+            memory_words = set(memory.content.lower().split())
+            score = len(query_words.intersection(memory_words))
+            if score > 0:
+                scored_memories.append((memory, score))
+        
+        scored_memories.sort(key=lambda x: x[1], reverse=True)
+        memories = [m[0] for m in scored_memories[:max_results]]
+    
+    return {
+        "memories": [
+            {
+                "content": m.content,
+                "type": m.memory_type.value,
+                "importance": m.importance.value,
+                "timestamp": m.timestamp,
+                "access_count": m.access_count
+            }
+            for m in memories
+        ],
+        "total_memories": len(memory_mgr.long_term_memory)
+    }
+
+def store_persona_memory(persona_key: str, content: str, memory_type: str, importance: str, tags: list = None):
+    """Store a new memory for a persona."""
+    memory_mgr = get_memory_manager(persona_key)
+    
+    # Convert string values to enums
+    memory_type_enum = MemoryType(memory_type)
+    importance_map = {
+        "low": MemoryImportance.LOW,
+        "medium": MemoryImportance.MEDIUM,
+        "high": MemoryImportance.HIGH,
+        "critical": MemoryImportance.CRITICAL
+    }
+    importance_enum = importance_map.get(importance.lower(), MemoryImportance.MEDIUM)
+    
+    # Store the memory
+    memory_mgr._store_memory(content, memory_type_enum, importance_enum, tags or [])
+    
+    return {"status": "OK", "message": f"Memory stored successfully for {persona_key}"}
+
+def analyze_persona_personality(persona_key: str, include_history: bool = False):
+    """Analyze personality development for a persona."""
+    memory_mgr = get_memory_manager(persona_key)
+    
+    result = {
+        "persona": persona_key,
+        "interaction_count": memory_mgr.interaction_count,
+        "personality_summary": memory_mgr.get_personality_summary(),
+        "traits": {}
+    }
+    
+    # Add current trait values
+    for name, trait in memory_mgr.personality_traits.items():
+        result["traits"][name] = {
+            "value": trait.value,
+            "confidence": trait.confidence,
+            "evidence_count": trait.evidence_count,
+            "description": memory_mgr.PERSONALITY_DIMENSIONS.get(name, "")
+        }
+    
+    if include_history:
+        # Could add historical tracking here if needed
+        result["history"] = "Historical tracking not yet implemented"
+    
+    return result
