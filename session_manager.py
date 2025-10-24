@@ -4,6 +4,9 @@
 import asyncio
 import time
 import sys
+import os
+import numpy
+from scipy import signal
 
 import pyaudio
 from google.genai import types
@@ -13,7 +16,8 @@ import state
 from config import (CONFIG, LIVE_MODEL, PERSONAS, KEEPALIVE_SECONDS,
                     RECONNECT_BACKOFF_SECONDS, MAX_BACKOFF_SECONDS,
                     SESSION_SHORT_LIFETIME_S, SESSION_INFINITE_RETRY, IDLE_SECONDS,
-                    VOICE_CATALOG)
+                    VOICE_CATALOG, SLEEP_INACTIVITY_TIMEOUT_S, SHUTDOWN_INACTIVITY_TIMEOUT_S,
+                    VOICE_ACTIVITY_THRESHOLD)
 from firestore_memory import get_firestore_memory
 from led_controller import led_controller
 
@@ -36,6 +40,11 @@ def _detect_usb_microphone():
     Returns None if no USB microphone is found.
     """
     try:
+        # Suppress ALSA errors during detection
+        null_fd = os.open('/dev/null', os.O_WRONLY)
+        original_stderr = os.dup(2)
+        os.dup2(null_fd, 2)
+        
         p = pyaudio.PyAudio()
         info = p.get_host_api_info_by_index(0)
         num_devices = info.get('deviceCount')
@@ -47,10 +56,14 @@ def _detect_usb_microphone():
             # Look for USB audio devices
             if (device_info.get('maxInputChannels') > 0 and 
                 any(keyword in device_name for keyword in ['usb', 'audio', 'microphone', 'mic'])):
+                os.dup2(original_stderr, 2)
+                os.close(null_fd)
                 print(f"[SESSION] Found USB microphone: Device {i} - {device_info.get('name')}")
                 p.terminate()
                 return i
         
+        os.dup2(original_stderr, 2)
+        os.close(null_fd)
         print("[SESSION] No USB microphone found, using default device")
         p.terminate()
         return None
@@ -65,6 +78,11 @@ def _detect_usb_speaker():
     Returns None if no USB speaker is found.
     """
     try:
+        # Suppress ALSA errors during detection
+        null_fd = os.open('/dev/null', os.O_WRONLY)
+        original_stderr = os.dup(2)
+        os.dup2(null_fd, 2)
+        
         p = pyaudio.PyAudio()
         info = p.get_host_api_info_by_index(0)
         num_devices = info.get('deviceCount')
@@ -76,10 +94,14 @@ def _detect_usb_speaker():
             # Look for USB audio devices
             if (device_info.get('maxOutputChannels') > 0 and 
                 any(keyword in device_name for keyword in ['usb', 'audio', 'speaker', 'headphone'])):
+                os.dup2(original_stderr, 2)
+                os.close(null_fd)
                 print(f"[SESSION] Found USB speaker: Device {i} - {device_info.get('name')}")
                 p.terminate()
                 return i
         
+        os.dup2(original_stderr, 2)
+        os.close(null_fd)
         print("[SESSION] No USB speaker found, using default device")
         p.terminate()
         return None
@@ -129,19 +151,52 @@ async def gemini_live_session():
     MIC_DEVICE_INDEX = _detect_usb_microphone()
     SPEAKER_DEVICE_INDEX = _detect_usb_speaker()
 
+    # Suppress ALSA errors during initialization
+    null_fd = os.open('/dev/null', os.O_WRONLY)
+    original_stderr = os.dup(2)
+    os.dup2(null_fd, 2)
+    
     p = pyaudio.PyAudio()
+    
+    # Check microphone device capabilities and use appropriate sample rate
+    if MIC_DEVICE_INDEX is not None:
+        mic_info = p.get_device_info_by_index(MIC_DEVICE_INDEX)
+        mic_rate = int(mic_info['defaultSampleRate'])
+    else:
+        mic_rate = CONFIG["audio"]["rate"]
+    
+    # Check speaker device capabilities and use appropriate sample rate
+    if SPEAKER_DEVICE_INDEX is not None:
+        speaker_info = p.get_device_info_by_index(SPEAKER_DEVICE_INDEX)
+        speaker_rate = int(speaker_info['defaultSampleRate'])
+    else:
+        speaker_rate = CONFIG["audio"]["speaker_rate"]
+    
+    # Restore stderr to print device info
+    os.dup2(original_stderr, 2)
+    os.close(null_fd)
+    print(f"[SESSION] Microphone sample rate: {mic_rate}")
+    print(f"[SESSION] Speaker sample rate: {speaker_rate}")
+    
+    # Suppress ALSA errors when opening streams
+    null_fd = os.open('/dev/null', os.O_WRONLY)
+    os.dup2(null_fd, 2)
 
-    # --- MODIFIED: Added input_device_index ---
+    # --- MODIFIED: Use microphone's native sample rate ---
     mic_stream = p.open(format=CONFIG["audio"]["format"], channels=CONFIG["audio"]["channels"],
-                        rate=CONFIG["audio"]["rate"], input=True,
+                        rate=mic_rate, input=True,
                         frames_per_buffer=CONFIG["audio"]["chunk_size"],
                         input_device_index=MIC_DEVICE_INDEX)
                         
-    # --- MODIFIED: Added output_device_index ---
+    # --- MODIFIED: Added output_device_index and use device's native sample rate ---
     spk_stream = p.open(format=pyaudio.paInt16, channels=CONFIG["audio"]["channels"],
-                        rate=CONFIG["audio"]["speaker_rate"], output=True,
+                        rate=speaker_rate, output=True,
                         frames_per_buffer=CONFIG["audio"]["chunk_size"],
                         output_device_index=SPEAKER_DEVICE_INDEX)
+    
+    # Restore stderr after opening streams
+    os.dup2(original_stderr, 2)
+    os.close(null_fd)
 
     reconnect_attempt = 0
     backoff = RECONNECT_BACKOFF_SECONDS
@@ -153,6 +208,7 @@ async def gemini_live_session():
         close_reason = None
         start_of_session = time.monotonic()
         last_activity = start_of_session
+        last_voice_activity = start_of_session  # Track last time voice input was detected
 
         pending_voice = state.active_voice_name
         pending_persona_key = state.active_persona_key
@@ -160,6 +216,11 @@ async def gemini_live_session():
         def touch():
             nonlocal last_activity
             last_activity = time.monotonic()
+        
+        def touch_voice():
+            """Track voice activity separately from other activity"""
+            nonlocal last_voice_activity
+            last_voice_activity = time.monotonic()
 
         def compose_system_instruction():
             persona = PERSONAS.get(state.active_persona_key, {"prompt": "", "voice": "Kore"})
@@ -218,10 +279,34 @@ async def gemini_live_session():
                 keepalive_task = asyncio.create_task(keepalive())
 
                 async def mic_gen():
+                    # Gemini expects 24kHz audio
+                    gemini_rate = 24000
                     while state.current_state == state.RobotState.LISTENING:
                         chunk = await asyncio.to_thread(mic_stream.read, CONFIG["audio"]["chunk_size"], False)
                         if mic_enabled_flag["on"]:
-                            yield types.Blob(data=chunk, mime_type="audio/pcm;rate=16000")
+                            # Apply microphone gain amplification
+                            audio_data = numpy.frombuffer(chunk, dtype=numpy.int16)
+                            mic_gain = CONFIG["audio"].get("mic_gain", 1.0)
+                            if mic_gain != 1.0:
+                                audio_data = numpy.clip(audio_data * mic_gain, -32768, 32767).astype(numpy.int16)
+                            
+                            # --- NEW: Detect voice activity by analyzing volume ---
+                            # Calculate RMS (root mean square) volume
+                            volume_rms = numpy.sqrt(numpy.mean(numpy.square(audio_data)))
+                            # Normalize volume (int16 range is -32768 to 32767)
+                            normalized_volume = volume_rms / 32768.0
+                            
+                            # Check if volume exceeds threshold (voice activity detected)
+                            if normalized_volume > VOICE_ACTIVITY_THRESHOLD:
+                                touch_voice()
+                            
+                            # Resample from mic_rate to gemini_rate if needed
+                            if mic_rate != gemini_rate:
+                                num_samples = int(len(audio_data) * gemini_rate / mic_rate)
+                                audio_data = signal.resample(audio_data, num_samples).astype(numpy.int16)
+                            
+                            chunk = audio_data.tobytes()
+                            yield types.Blob(data=chunk, mime_type=f"audio/pcm;rate={gemini_rate}")
                             touch()
                         else:
                             await asyncio.sleep(0.02)
@@ -248,7 +333,22 @@ async def gemini_live_session():
                             mic_enabled_flag["on"] = False
                             # --- NEW: Turn on solid LEDs when assistant is speaking ---
                             led_controller.turn_on()
-                        spk_stream.write(msg.data); played = True
+                        
+                        # Gemini outputs audio at 24kHz, but speaker runs at 48kHz
+                        # Resample to match speaker's sample rate to fix pitch
+                        audio_data = numpy.frombuffer(msg.data, dtype=numpy.int16)
+                        gemini_rate = 24000
+                        
+                        # Resample from Gemini's 24kHz to speaker's 48kHz
+                        if speaker_rate != gemini_rate:
+                            num_samples = int(len(audio_data) * speaker_rate / gemini_rate)
+                            audio_data = signal.resample(audio_data, num_samples).astype(numpy.int16)
+                        
+                        # Apply volume control
+                        volume = CONFIG["audio"].get("volume", 0.8)
+                        audio_data = (audio_data * volume).astype(numpy.int16)
+                        spk_stream.write(audio_data.tobytes())
+                        played = True
 
                     sc = getattr(msg, "server_content", None)
                     if sc:
@@ -276,6 +376,29 @@ async def gemini_live_session():
                         # --- NEW: Return to pulsing LEDs when assistant stops speaking ---
                         led_controller.start_pulse()
 
+                    # --- NEW: Check for inactivity timeouts based on voice activity ---
+                    time_since_voice = time.monotonic() - last_voice_activity
+                    
+                    # Check for extended inactivity (shutdown)
+                    if time_since_voice > SHUTDOWN_INACTIVITY_TIMEOUT_S:
+                        print(f"[SESSION] No voice activity for {SHUTDOWN_INACTIVITY_TIMEOUT_S/60:.1f} minutes. Shutting down system.")
+                        # Turn off LEDs before shutdown
+                        led_controller.turn_off()
+                        # Call shutdown_robot through the tool mechanism
+                        os.system("sudo shutdown -h now")
+                        close_reason = "shutdown_to_sleep"
+                        break
+                    
+                    # Check for sleep inactivity (return to sleep loop)
+                    if time_since_voice > SLEEP_INACTIVITY_TIMEOUT_S:
+                        print(f"[SESSION] No voice activity for {SLEEP_INACTIVITY_TIMEOUT_S/60:.1f} minutes. Returning to sleep.")
+                        # Turn off LEDs before returning to sleep
+                        led_controller.turn_off()
+                        state.set_state(state.RobotState.SLEEPING)
+                        close_reason = "sleep_timeout"
+                        break
+                    
+                    # Original idle timeout (kept for backward compatibility)
                     if (time.monotonic() - last_activity) > IDLE_SECONDS:
                         close_reason = "idle_timeout"; break
 
@@ -283,10 +406,14 @@ async def gemini_live_session():
                         responses = []
                         for fc in msg.tool_call.function_calls:
                             name = fc.name; args = fc.args or {}; fid = fc.id
+                            print(f"[DEBUG] Tool call received: {name} with args: {args}")
                             if name == "motor_command":
-                                send_command_to_mcu(args)
-                                responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK"}))
+                                print("[DEBUG] Motor command received but DISABLED (motors deprecated)")
+                                # --- DEPRECATED: Motor functions temporarily disabled ---
+                                # send_command_to_mcu(args)
+                                responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"DISABLED", "message":"Motor functions are temporarily disabled"}))
                             elif name == "shutdown_robot":
+                                print("[DEBUG] Shutdown command triggered")
                                 print("[SESSION] 'shutdown_robot' tool called.")
                                 # --- NEW: Turn off LEDs immediately when shutdown is called ---
                                 led_controller.turn_off()
@@ -294,6 +421,7 @@ async def gemini_live_session():
                                 close_reason = "shutdown_to_sleep"
                                 responses.append(types.FunctionResponse(id=fid, name=name, response={"status":"OK"}))
                             elif name == "web_search":
+                                print(f"[DEBUG] Web search: {args.get('query')}")
                                 data = searcher.search(args.get("query"), args.get("max_results"))
                                 responses.append(types.FunctionResponse(id=fid, name=name, response=data))
                             # --- NEW: Handle the character creation tool call ---
@@ -366,6 +494,16 @@ async def gemini_live_session():
         if close_reason == "persona_switch":
             state.set_persona(pending_persona_key, pending_voice)
             await asyncio.sleep(RECONNECT_BACKOFF_SECONDS); continue
+
+        # --- NEW: Handle sleep timeout (return to sleep loop) ---
+        if close_reason == "sleep_timeout":
+            # State was already set to SLEEPING, just break out of loop
+            break
+
+        # --- NEW: Handle shutdown (system is shutting down) ---
+        if close_reason == "shutdown_to_sleep":
+            # System shutdown command already executed, just break
+            break
 
         if state.current_state != state.RobotState.LISTENING:
             break

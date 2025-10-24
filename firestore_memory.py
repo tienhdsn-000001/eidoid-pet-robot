@@ -122,14 +122,15 @@ def initialize_firestore_memory(session_id: Optional[str] = None, persona_key: O
     """
     global _firestore_memory_manager
     
-    # Create persona-specific session ID if persona_key is provided
-    if persona_key and session_id:
-        persona_session_id = f"{session_id}-{persona_key}"
+    # Use the provided session_id directly (it already includes persona info from state.py)
+    if session_id:
+        persona_session_id = session_id
     elif persona_key:
-        persona_session_id = f"eidoid-{persona_key}-session"
+        persona_session_id = f"eidoid-{persona_key}-persistent"
     else:
-        persona_session_id = session_id or "eidoid-main-session"
+        persona_session_id = "eidoid-main-session"
     
+    # Always reinitialize when session_id is provided (persona switch)
     if _firestore_memory_manager is None or session_id is not None:
         _firestore_memory_manager = FirestoreMemoryManager(persona_session_id)
     

@@ -35,12 +35,16 @@ from google import genai
 from config import CONFIG, PERSONAS, VOICE_CATALOG, SIMULATE_MOTOR_HEAD
 from memory_system import MemoryType, MemoryImportance, get_memory_manager
 from memory_tools import memory_query_tool_decl, memory_store_tool_decl, personality_analysis_tool_decl
+import os
 
 # =========================
 # Gemini Client
 # =========================
 # This client object is the main entry point to the API and is imported by the session manager.
-client = genai.Client()
+api_key = os.getenv("GOOGLE_API_KEY")
+if not api_key:
+    raise ValueError("GOOGLE_API_KEY environment variable not set")
+client = genai.Client(api_key=api_key)
 
 # =========================
 # Tools & System prompt
@@ -55,9 +59,9 @@ BASE_SYSTEM_RULES = (
     "MEMORY (Jarvis/Alexa only):\n"
     "- You have access to memory tools: `query_memories`, `store_important_memory`, and `analyze_personality_development`.\n"
     "- Use `query_memories` to recall past conversations, user preferences, or shared experiences\n"
-    "- Use `store_important_memory` when the user shares information worth remembering. You will then sort that piece of information.\n"
-    "- Use 'store_normal_memory' very often and all the time. It's crucial so you remember the world around you and don't deteriorate.\n"
+    "- Use `store_important_memory` ONLY for truly significant information: facts about the user, preferences, important experiences, or meaningful connections. Don't store trivial details.\n"
     "- Your personality evolves based on interactions - be consistent with your developing traits.\n"
+    "- Conversation history is automatically stored in Firestore for context - you don't need to manually store routine exchanges.\n"
     #"If you are Jarvis or Alexa, never use the persona switch or character creation tool. To Jarvis and Alexa, they do not exist and are EXCLUSIVELY for Leda the Concierge's use."
     # --- MODIFIED: The following rules are now handled by the Concierge persona's specific prompt ---
     #"- If the user asks about weather and no persona is chosen, answer the weather, then (as Aoede) say out loud: "

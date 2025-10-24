@@ -48,8 +48,11 @@ def set_persona(persona_key, voice_name):
     current_memory_manager = get_memory_manager(persona_key)
     
     # --- NEW: Initialize persona-specific Firestore memory ---
+    # Create a persistent session ID for this persona
     from firestore_memory import initialize_firestore_memory
-    initialize_firestore_memory(persona_key=persona_key)
+    session_id = f"eidoid-{persona_key}-persistent"
+    print(f"[STATE] Initializing Firestore for persona '{persona_key}' with session ID: {session_id}")
+    initialize_firestore_memory(session_id=session_id, persona_key=persona_key)
 
 def set_session_state(hint=None, is_concierge_waiting=False, custom_instructions=None):
     global startup_hint, concierge_waiting_for_description, session_custom_instructions
